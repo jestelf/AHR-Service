@@ -1,0 +1,13 @@
+{
+  "564016491": {
+    "temperature": 0.612,
+    "top_k": 49,
+    "top_p": 0.703,
+    "repetition_penalty": 2.223,
+    "length_penalty": 1.111,
+    "speed": 1.02,
+    "notifications": true,
+    "dotX": 50,
+    "dotY": 50
+  }
+}
