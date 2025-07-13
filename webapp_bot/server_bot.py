@@ -231,6 +231,13 @@ def inc_daily_gen(uid: str) -> None:
     save_json(meta, d)
 
 
+def reset_daily_gen(uid: str) -> None:
+    """Сбросить счётчик дневных генераций пользователя."""
+    meta = USERS_EMB / uid / "gen_meta.json"
+    meta.parent.mkdir(parents=True, exist_ok=True)
+    save_json(meta, {"date": date.today().isoformat(), "count": 0})
+
+
 def log_line(uid: str, line: str):
     folder = USERS_EMB / uid
     folder.mkdir(parents=True, exist_ok=True)
@@ -766,6 +773,15 @@ async def cmd_filter(upd: Update, ctx: ContextTypes.DEFAULT_TYPE):
     msg = "Антискам-фильтр выключен." if state else "Антискам-фильтр включен."
     await upd.message.reply_text(msg)
 
+
+async def cmd_reset_limit(upd: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = str(upd.effective_user.id)
+    if not is_admin(uid):
+        await upd.message.reply_text("⛔ Это админ-команда.")
+        return
+    reset_daily_gen(uid)
+    await upd.message.reply_text("✅ Лимит генераций сброшен.")
+
 def run_flask():
     app.run(port=5000, debug=False, use_reloader=False)
 
@@ -788,6 +804,7 @@ def main():
     app_tg.add_handler(CallbackQueryHandler(cb_handler))
     app_tg.add_handler(CommandHandler("tariff", cmd_tariff))
     app_tg.add_handler(CommandHandler("filter", cmd_filter))
+    app_tg.add_handler(CommandHandler("reset_limit", cmd_reset_limit))
     app_tg.add_handler(CommandHandler("help", cmd_help))
     app_tg.add_handler(CommandHandler("about", cmd_about))
     app_tg.add_handler(CommandHandler("stats", cmd_stats))
