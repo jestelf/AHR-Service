@@ -146,6 +146,16 @@ def save_json(p: str, d: dict) -> None:
     with open(p, "w", encoding="utf-8") as f:
         json.dump(d, f, ensure_ascii=False, indent=2)
 
+def toggle_filter(uid: str) -> bool:
+    """Переключить антискам-фильтр. Возвращает новое состояние."""
+    db = load_json(SETTINGS_DB)
+    cfg = db.get(uid, {})
+    state = not cfg.get("filter_off", False)
+    cfg["filter_off"] = state
+    db[uid] = cfg
+    save_json(SETTINGS_DB, db)
+    return state
+
 def is_blacklisted(uid: str) -> bool:
     with open(BL_FILE, encoding="utf-8") as f:
         return uid in {l.strip() for l in f}
@@ -560,32 +570,36 @@ async def tg_text(upd: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if is_blacklisted(uid):
         return
 
-    # ---------- анти-скам ----------
-    clf = get_classifier()
-    scores = await clf.analyse(txt)
-    comp = ";".join(f"{ABBR[k]}{scores.get(k,0)*100:04.1f}" for k in ABBR)
-    log_line(uid, f"{txt} ({comp})")
+    settings = load_json(SETTINGS_DB).get(uid, {})
+    if not settings.get("filter_off"):
+        # ---------- анти-скам ----------
+        clf = get_classifier()
+        scores = await clf.analyse(txt)
+        comp = ";".join(f"{ABBR[k]}{scores.get(k,0)*100:04.1f}" for k in ABBR)
+        log_line(uid, f"{txt} ({comp})")
 
-    safe = scores.get("Безопасные сообщения", 0)
-    top_lbl, top_p = max(scores.items(), key=lambda kv: kv[1])
+        safe = scores.get("Безопасные сообщения", 0)
+        top_lbl, top_p = max(scores.items(), key=lambda kv: kv[1])
 
-    warn = None
-    if top_lbl != "Безопасные сообщения" and top_p >= ALERT_THRESH:
-        warn = f"«{top_lbl}» {top_p*100:.0f}%"
-    elif safe < 0.50 and top_p < ALERT_THRESH:
-        parts = [f"{l} {p*100:.0f}%" for l, p in scores.items()
-                 if l != "Безопасные сообщения" and p > 0.05]
-        if parts:
-            warn = "; ".join(parts)
+        warn = None
+        if top_lbl != "Безопасные сообщения" and top_p >= ALERT_THRESH:
+            warn = f"«{top_lbl}» {top_p*100:.0f}%"
+        elif safe < 0.50 and top_p < ALERT_THRESH:
+            parts = [f"{l} {p*100:.0f}%" for l, p in scores.items()
+                     if l != "Безопасные сообщения" and p > 0.05]
+            if parts:
+                warn = "; ".join(parts)
 
-    if warn:
-        s = add_strike(uid)
-        if s >= MAX_STRIKES:
-            add_black(uid)
-            await upd.message.reply_text("🚫 Заблокировано.")
+        if warn:
+            s = add_strike(uid)
+            if s >= MAX_STRIKES:
+                add_black(uid)
+                await upd.message.reply_text("🚫 Заблокировано.")
+                return
+            await upd.message.reply_text(f"⚠️ {warn}. Strike {s}/{MAX_STRIKES}.")
             return
-        await upd.message.reply_text(f"⚠️ {warn}. Strike {s}/{MAX_STRIKES}.")
-        return
+    else:
+        log_line(uid, txt)
 
     # ---------- обычный TTS ----------
     slot = ACTIVE_SLOTS.get(uid)
@@ -642,6 +656,12 @@ async def cmd_tariff(upd: Update, ctx: ContextTypes.DEFAULT_TYPE):
                                  reply_markup=build_tariff_keyboard(plan),
                                  parse_mode='Markdown')
 
+async def cmd_filter(upd: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = str(upd.effective_user.id)
+    state = toggle_filter(uid)
+    msg = "Антискам-фильтр выключен." if state else "Антискам-фильтр включен."
+    await upd.message.reply_text(msg)
+
 def run_flask():
     app.run(port=5000, debug=False, use_reloader=False)
 
@@ -662,6 +682,7 @@ def main():
     app_tg.add_handler(CommandHandler("start", cmd_start))
     app_tg.add_handler(CallbackQueryHandler(cb_handler))
     app_tg.add_handler(CommandHandler("tariff", cmd_tariff))
+    app_tg.add_handler(CommandHandler("filter", cmd_filter))
     app_tg.add_handler(CommandHandler("help", cmd_help))
     app_tg.add_handler(CommandHandler("about", cmd_about))
     app_tg.add_handler(CommandHandler("stats", cmd_stats))
