@@ -45,6 +45,7 @@ from telegram.ext import (
 from audio_checker import predict
 from classifier import get_classifier
 from voice_module import VoiceModule
+from pydub import AudioSegment
 
 # ───────────────────────── конфигурация
 load_dotenv()  # ← .env читается здесь
@@ -401,7 +402,7 @@ async def tg_voice(upd: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await upd.message.reply_text("Выберите слот через /start")
         return
 
-    v = upd.message.voice or upd.message.audio
+    v = upd.message.voice or upd.message.audio or upd.message.video or upd.message.video_note
     if not v:
         return
 
@@ -416,9 +417,22 @@ async def tg_voice(upd: Update, ctx: ContextTypes.DEFAULT_TYPE):
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".ogg")
     tmp.close()
     await (await ctx.bot.get_file(v.file_id)).download_to_drive(tmp.name)
+    file_path = tmp.name
+    if upd.message.video or upd.message.video_note:
+        wav_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+        wav_tmp.close()
+        (
+            AudioSegment.from_file(tmp.name)
+            .set_channels(1)
+            .set_frame_rate(16_000)
+            .set_sample_width(2)
+            .export(wav_tmp.name, format="wav")
+        )
+        os.remove(tmp.name)
+        file_path = wav_tmp.name
     loop = asyncio.get_running_loop()
-    await loop.run_in_executor(voice_pool, VOICE.create_embedding, tmp.name, uid)
-    os.remove(tmp.name)
+    await loop.run_in_executor(voice_pool, VOICE.create_embedding, file_path, uid)
+    os.remove(file_path)
 
     after = set(user_dir.glob("speaker_embedding_*.npz"))
     new = after - before

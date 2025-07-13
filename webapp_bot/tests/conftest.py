@@ -28,6 +28,13 @@ class DummyVM:
 
 sys.modules['voice_module'] = types.ModuleType('voice_module')
 sys.modules['voice_module'].VoiceModule = DummyVM
+sys.modules['audio_checker'] = types.ModuleType('audio_checker')
+sys.modules['audio_checker'].predict = lambda path: "BINARY:0 CLASS:0"
+sys.modules['classifier'] = types.ModuleType('classifier')
+class DummyClf:
+    async def analyse(self, text):
+        return {"Безопасные сообщения": 1.0}
+sys.modules['classifier'].get_classifier = lambda: DummyClf()
 
 from server_bot import app as flask_app, VOICE
 
@@ -40,7 +47,7 @@ def client():
 def silence_wav(tmp_path):
     """1-секундный WAV 16 kHz silence."""
     path = tmp_path / "silence.wav"
-    with contextlib.closing(wave.open(path, "w")) as f:
+    with contextlib.closing(wave.open(str(path), "w")) as f:
         f.setnchannels(1); f.setsampwidth(2); f.setframerate(16_000)
         f.writeframes(b"\x00\x00" * 16_000)
     return path
