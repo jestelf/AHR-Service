@@ -9,6 +9,7 @@
     "notifications": true,
     "dotX": 50,
     "dotY": 50,
-    "filter_off": false
+    "filter_off": false,
+    "auto_delete": false
   }
 }
