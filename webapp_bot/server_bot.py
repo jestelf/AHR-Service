@@ -288,6 +288,27 @@ def log_line(uid: str, line: str):
         f.write(f"[{ts}] {line}\n")
 
 
+AUTO_DEL_KEY = "auto_delete"
+DEL_DELAY = 5.0
+
+
+async def _maybe_delete(ctx, chat_id: int, msg_id: int, delay: float = 0.0) -> None:
+    """Безопасное удаление сообщения Telegram."""
+    if not ctx or not getattr(ctx, "bot", None):
+        return
+    try:
+        if delay:
+            await asyncio.sleep(delay)
+        await ctx.bot.delete_message(chat_id=chat_id, message_id=msg_id)
+    except TelegramError:
+        pass
+
+
+def auto_delete_enabled(uid: str) -> bool:
+    """Проверяем флаг автоудаления из user_settings.json."""
+    return load_json(SETTINGS_DB).get(uid, {}).get(AUTO_DEL_KEY, False)
+
+
 ABBR = {
     "Безопасные сообщения": "БС",
     "Родственник в беде": "РВБ",
@@ -673,7 +694,10 @@ async def tg_voice(upd: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await msg.reply_text(f"Слот {slot+1} вне диапазона.")
         return
 
-    await msg.reply_text("⏳ Обрабатываю запись…")
+    m = await upd.message.reply_text("⏳ Обрабатываю запись…")
+    if auto_delete_enabled(uid):
+        await _maybe_delete(ctx, m.chat_id, m.message_id, DEL_DELAY)
+
 
     user_dir = USERS_EMB / uid
     before = set(user_dir.glob("speaker_embedding_*.npz"))
@@ -688,7 +712,10 @@ async def tg_voice(upd: Update, ctx: ContextTypes.DEFAULT_TYPE):
     after = set(user_dir.glob("speaker_embedding_*.npz"))
     new = after - before
     if not new:
-        await msg.reply_text("Ошибка создания слепка.")
+        err = await upd.message.reply_text("Ошибка создания слепка.")
+        if auto_delete_enabled(uid):
+            await _maybe_delete(ctx, upd.effective_chat.id, upd.message.message_id)
+            await _maybe_delete(ctx, err.chat_id, err.message_id, DEL_DELAY)
         return
 
     new_file = new.pop()
@@ -696,9 +723,12 @@ async def tg_voice(upd: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if target.exists():
         target.unlink()
     new_file.rename(target)
-    await msg.reply_text(
+    done = await upd.message.reply_text(
         "🗣️ Слепок создан.", reply_markup=build_slot_keyboard(uid)
     )
+    if auto_delete_enabled(uid):
+        await _maybe_delete(ctx, upd.effective_chat.id, upd.message.message_id)
+        await _maybe_delete(ctx, done.chat_id, done.message_id, DEL_DELAY)
 
 
 async def tg_text(upd: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -714,8 +744,9 @@ async def tg_text(upd: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     settings = load_json(SETTINGS_DB).get(uid, {})
     if not settings.get("filter_off"):
-        await msg.reply_text("⏳ Анализирую текст…")
-        
+        tmp = await upd.message.reply_text("⏳ Анализирую текст…")
+        if auto_delete_enabled(uid):
+            await _maybe_delete(ctx, tmp.chat_id, tmp.message_id, DEL_DELAY)
         clf = get_classifier()
         scores = await clf.analyse(txt)
         comp = ";".join(f"{ABBR[k]}{scores.get(k, 0) * 100:04.1f}" for k in ABBR)
@@ -735,17 +766,25 @@ async def tg_text(upd: Update, ctx: ContextTypes.DEFAULT_TYPE):
             ]
             if parts:
                 warn = "; ".join(parts)
-
-        await msg.reply_text(
+        res = await upd.message.reply_text(
             "Результат: безопасно" if not warn else "Результат: опасно"
         )
+        if auto_delete_enabled(uid):
+            await _maybe_delete(ctx, res.chat_id, res.message_id, DEL_DELAY)
+            await _maybe_delete(ctx, upd.effective_chat.id, upd.message.message_id)
         if warn:
             s = add_strike(uid)
             if s >= MAX_STRIKES:
                 add_black(uid)
-                await msg.reply_text("🚫 Заблокировано.")
+                ban = await upd.message.reply_text("🚫 Заблокировано.")
+                if auto_delete_enabled(uid):
+                    await _maybe_delete(ctx, upd.effective_chat.id, upd.message.message_id)
+                    await _maybe_delete(ctx, ban.chat_id, ban.message_id, DEL_DELAY)
                 return
-            await msg.reply_text(f"⚠️ {warn}. Strike {s}/{MAX_STRIKES}.")
+            warn_msg = await upd.message.reply_text(f"⚠️ {warn}. Strike {s}/{MAX_STRIKES}.")
+            if auto_delete_enabled(uid):
+                await _maybe_delete(ctx, upd.effective_chat.id, upd.message.message_id)
+                await _maybe_delete(ctx, warn_msg.chat_id, warn_msg.message_id, DEL_DELAY)
             return
     else:
         log_line(uid, txt)
@@ -756,18 +795,25 @@ async def tg_text(upd: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     if daily_gen_count(uid) >= tariff_info(uid)["daily_gen"]:
-        await msg.reply_text("Дневной лимит генераций исчерпан.")
+        lm = await upd.message.reply_text("Дневной лимит генераций исчерпан.")
+        if auto_delete_enabled(uid):
+            await _maybe_delete(ctx, upd.effective_chat.id, upd.message.message_id)
+            await _maybe_delete(ctx, lm.chat_id, lm.message_id, DEL_DELAY)
         return
 
     emb = USERS_EMB / uid / f"speaker_embedding_{slot}.npz"
     if not emb.exists():
-        await msg.reply_text(f"Слот {slot+1} пуст. Выберите занятый слот.")
+        sl = await upd.message.reply_text(f"Слот {slot+1} пуст. Выберите занятый слот.")
+        if auto_delete_enabled(uid):
+            await _maybe_delete(ctx, upd.effective_chat.id, upd.message.message_id)
+            await _maybe_delete(ctx, sl.chat_id, sl.message_id, DEL_DELAY)
         return
 
     apply_user_settings(uid)
     VOICE.user_embedding[uid] = emb  # type: ignore
-
-    await msg.reply_text("⏳ Генерирую речь…")
+    proc = await upd.message.reply_text("⏳ Генерирую речь…")
+    if auto_delete_enabled(uid):
+        await _maybe_delete(ctx, proc.chat_id, proc.message_id, DEL_DELAY)
 
     loop = asyncio.get_running_loop()
     try:
@@ -779,13 +825,17 @@ async def tg_text(upd: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     with open(str(wav_path), "rb") as f:
-        await ctx.bot.send_audio(
+        audio_msg = await ctx.bot.send_audio(
             chat_id=upd.effective_chat.id,
             audio=InputFile(f, filename=wav_path.name),
             title="TTS",
         )
     inc_daily_gen(uid)
-    await msg.reply_text("✅ Готово")
+    done = await upd.message.reply_text("✅ Готово")
+    if auto_delete_enabled(uid):
+        await _maybe_delete(ctx, upd.effective_chat.id, upd.message.message_id)
+        await _maybe_delete(ctx, audio_msg.chat_id, audio_msg.message_id, DEL_DELAY)
+        await _maybe_delete(ctx, done.chat_id, done.message_id, DEL_DELAY)
 
 
 def build_tariff_keyboard(current: str) -> InlineKeyboardMarkup:
