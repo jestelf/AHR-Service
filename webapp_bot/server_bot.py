@@ -273,6 +273,13 @@ def inc_daily_gen(uid: str) -> None:
     save_json(meta, d)
 
 
+def reset_daily_gen(uid: str) -> None:
+    """Сбросить счётчик дневных генераций пользователя."""
+    meta = USERS_EMB / uid / "gen_meta.json"
+    meta.parent.mkdir(parents=True, exist_ok=True)
+    save_json(meta, {"date": date.today().isoformat(), "count": 0})
+
+
 def log_line(uid: str, line: str):
     folder = USERS_EMB / uid
     folder.mkdir(parents=True, exist_ok=True)
@@ -814,12 +821,14 @@ async def cmd_add_limit(upd: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not is_admin(uid):
         await upd.message.reply_text("⛔ Это админ-команда.")
         return
+
     if not ctx.args or not ctx.args[0].isdigit():
         await upd.message.reply_text("Используйте: /add_limit <n>")
         return
     n = int(ctx.args[0])
     add_daily_gen(uid, n)
     await upd.message.reply_text(f"Добавлено {n} к дневному лимиту.")
+
 
 def run_flask():
     app.run(port=5000, debug=False, use_reloader=False)
