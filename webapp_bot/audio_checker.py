@@ -132,7 +132,8 @@ class PatentTTSNet(nn.Module):
 
 # ─────────────────────────────── загрузка весов
 MODEL = PatentTTSNet()
-ckpt_path = Path("models/patent_tts_net.pth")
+BASE_DIR = Path(__file__).resolve().parent
+ckpt_path = BASE_DIR / "models" / "patent_tts_net.pth"
 if not ckpt_path.exists():
     raise FileNotFoundError(f"{ckpt_path} not found")
 
