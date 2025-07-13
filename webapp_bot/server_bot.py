@@ -680,22 +680,24 @@ async def tg_voice(upd: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if is_blacklisted(uid):
         return
     slot = ACTIVE_SLOTS.get(uid)
+    msg = upd.effective_message
     if slot is None:
-        await upd.message.reply_text("Выберите слот через /start")
+        await msg.reply_text("Выберите слот через /start")
         return
 
-    v = upd.message.voice or upd.message.audio
+    v = msg.voice or msg.audio or msg.video_note
     if not v:
         return
 
     allowed = tariff_info(uid)["slots"]
     if not (0 <= slot < allowed):
-        await upd.message.reply_text(f"Слот {slot+1} вне диапазона.")
+        await msg.reply_text(f"Слот {slot+1} вне диапазона.")
         return
 
     m = await upd.message.reply_text("⏳ Обрабатываю запись…")
     if auto_delete_enabled(uid):
         await _maybe_delete(ctx, m.chat_id, m.message_id, DEL_DELAY)
+
 
     user_dir = USERS_EMB / uid
     before = set(user_dir.glob("speaker_embedding_*.npz"))
@@ -730,11 +732,12 @@ async def tg_voice(upd: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def tg_text(upd: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not upd.message or not upd.message.text:
+    msg = upd.effective_message
+    if not msg or not msg.text:
         return
 
     uid = str(upd.effective_user.id)
-    txt = upd.message.text.strip()
+    txt = msg.text.strip()
 
     if is_blacklisted(uid):
         return
@@ -744,7 +747,6 @@ async def tg_text(upd: Update, ctx: ContextTypes.DEFAULT_TYPE):
         tmp = await upd.message.reply_text("⏳ Анализирую текст…")
         if auto_delete_enabled(uid):
             await _maybe_delete(ctx, tmp.chat_id, tmp.message_id, DEL_DELAY)
-        
         clf = get_classifier()
         scores = await clf.analyse(txt)
         comp = ";".join(f"{ABBR[k]}{scores.get(k, 0) * 100:04.1f}" for k in ABBR)
@@ -764,7 +766,6 @@ async def tg_text(upd: Update, ctx: ContextTypes.DEFAULT_TYPE):
             ]
             if parts:
                 warn = "; ".join(parts)
-
         res = await upd.message.reply_text(
             "Результат: безопасно" if not warn else "Результат: опасно"
         )
@@ -810,7 +811,6 @@ async def tg_text(upd: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     apply_user_settings(uid)
     VOICE.user_embedding[uid] = emb  # type: ignore
-
     proc = await upd.message.reply_text("⏳ Генерирую речь…")
     if auto_delete_enabled(uid):
         await _maybe_delete(ctx, proc.chat_id, proc.message_id, DEL_DELAY)
@@ -913,8 +913,13 @@ def main():
     app_tg.add_handler(
         MessageHandler(filters.StatusUpdate.WEB_APP_DATA, handle_web_app)
     )
-    app_tg.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, tg_voice))
+    voice_f = filters.VOICE | filters.AUDIO | filters.VIDEO_NOTE
+    app_tg.add_handler(MessageHandler(voice_f, tg_voice))
     app_tg.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, tg_text))
+    edited = filters.UpdateType.EDITED_MESSAGE
+    app_tg.add_handler(MessageHandler(edited & filters.TEXT, tg_text))
+    edited_all = filters.UpdateType.EDITED_MESSAGE | filters.UpdateType.EDITED_CHANNEL_POST
+    app_tg.add_handler(MessageHandler(edited_all & voice_f, tg_voice))
     print("🤖 Bot up.")
     app_tg.run_polling()
 
