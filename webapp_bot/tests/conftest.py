@@ -1,4 +1,34 @@
-import pytest, os, tempfile, io, wave, contextlib
+import pytest, os, tempfile, io, wave, contextlib, types, sys
+
+# ---- lightweight stub for voice_module before importing server_bot ----
+class DummyVM:
+    def __init__(self, *a, **k):
+        self.storage = tempfile.gettempdir()
+        self._params = {}
+
+    def get_user_params(self, uid):
+        return self._params.get(uid, {"temperature": 0.5, "speed": 1.0})
+
+    def set_user_params(self, uid, **kw):
+        p = self.get_user_params(uid)
+        p.update(kw)
+        if "speed" in p:
+            p["speed"] = min(3.0, p["speed"])
+        self._params[uid] = p
+
+    def create_embedding(self, path, uid):
+        dst = os.path.join(self.storage, f"emb_{uid}.wav")
+        open(dst, "wb").write(b"RIFF")
+        return dst
+
+    def synthesize(self, uid, text, embedding_file=None):
+        dst = os.path.join(self.storage, f"tts_{uid}.wav")
+        open(dst, "wb").write(b"RIFF" + b"0" * 1000)
+        return dst
+
+sys.modules['voice_module'] = types.ModuleType('voice_module')
+sys.modules['voice_module'].VoiceModule = DummyVM
+
 from server_bot import app as flask_app, VOICE
 
 @pytest.fixture(scope="session")
