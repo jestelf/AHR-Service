@@ -128,7 +128,13 @@ def set_tariff_safe(uid: str, name: str) -> str:
     if name not in TARIFF_DEFS:  # неизвестный план
         return get_tariff(uid)  # ничего не меняем
     db = load_json(TARIFFS_DB)
-    db[uid] = name
+    rec = db.get(uid)
+    if isinstance(rec, str):
+        rec = {"plan": name, "bonus_gen": 0}
+    else:
+        rec = rec or {"bonus_gen": 0}
+        rec["plan"] = name
+    db[uid] = rec
     save_json(TARIFFS_DB, db)
     return name
 
@@ -196,19 +202,55 @@ def add_strike(uid: str) -> int:
     save_json(STRIKES_DB, d)
     return d[uid]
 
+def _tariff_record(uid: str) -> dict:
+    """Возвращает запись из tariffs_db.json, создавая при необходимости."""
+    db = load_json(TARIFFS_DB)
+    rec = db.get(uid)
+    if isinstance(rec, str):
+        rec = {"plan": rec, "bonus_gen": 0}
+    if not rec:
+        rec = {"plan": "free", "bonus_gen": 0}
+    if "bonus_gen" not in rec:
+        rec["bonus_gen"] = 0
+    db[uid] = rec
+    save_json(TARIFFS_DB, db)
+    return rec
+
 
 def get_tariff(uid: str) -> str:
-    return load_json(TARIFFS_DB).get(uid, "free")
+    return _tariff_record(uid).get("plan", "free")
 
 
 def set_tariff(uid: str, name: str) -> None:
     db = load_json(TARIFFS_DB)
-    db[uid] = name
+    rec = db.get(uid)
+    if isinstance(rec, str):
+        rec = {"plan": name, "bonus_gen": 0}
+    else:
+        rec = rec or {"bonus_gen": 0}
+        rec["plan"] = name
+    db[uid] = rec
     save_json(TARIFFS_DB, db)
 
 
+def add_daily_gen(uid: str, amount: int) -> int:
+    """Увеличивает bonus_gen и возвращает новое значение."""
+    db = load_json(TARIFFS_DB)
+    rec = db.get(uid)
+    if isinstance(rec, str):
+        rec = {"plan": rec, "bonus_gen": 0}
+    rec = rec or {"plan": "free", "bonus_gen": 0}
+    rec["bonus_gen"] = rec.get("bonus_gen", 0) + int(amount)
+    db[uid] = rec
+    save_json(TARIFFS_DB, db)
+    return rec["bonus_gen"]
+
+
 def tariff_info(uid: str) -> dict:
-    return TARIFF_DEFS[get_tariff(uid)]
+    rec = _tariff_record(uid)
+    base = TARIFF_DEFS[rec.get("plan", "free")].copy()
+    base["daily_gen"] += rec.get("bonus_gen", 0)
+    return base
 
 
 def daily_gen_count(uid: str) -> int:
@@ -766,6 +808,19 @@ async def cmd_filter(upd: Update, ctx: ContextTypes.DEFAULT_TYPE):
     msg = "Антискам-фильтр выключен." if state else "Антискам-фильтр включен."
     await upd.message.reply_text(msg)
 
+
+async def cmd_add_limit(upd: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = str(upd.effective_user.id)
+    if not is_admin(uid):
+        await upd.message.reply_text("⛔ Это админ-команда.")
+        return
+    if not ctx.args or not ctx.args[0].isdigit():
+        await upd.message.reply_text("Используйте: /add_limit <n>")
+        return
+    n = int(ctx.args[0])
+    add_daily_gen(uid, n)
+    await upd.message.reply_text(f"Добавлено {n} к дневному лимиту.")
+
 def run_flask():
     app.run(port=5000, debug=False, use_reloader=False)
 
@@ -788,6 +843,7 @@ def main():
     app_tg.add_handler(CallbackQueryHandler(cb_handler))
     app_tg.add_handler(CommandHandler("tariff", cmd_tariff))
     app_tg.add_handler(CommandHandler("filter", cmd_filter))
+    app_tg.add_handler(CommandHandler("add_limit", cmd_add_limit))
     app_tg.add_handler(CommandHandler("help", cmd_help))
     app_tg.add_handler(CommandHandler("about", cmd_about))
     app_tg.add_handler(CommandHandler("stats", cmd_stats))
