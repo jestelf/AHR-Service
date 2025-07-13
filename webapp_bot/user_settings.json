@@ -8,6 +8,7 @@
     "speed": 1.02,
     "notifications": true,
     "dotX": 50,
-    "dotY": 50
+    "dotY": 50,
+    "filter_off": false
   }
 }
