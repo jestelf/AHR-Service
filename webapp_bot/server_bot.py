@@ -659,20 +659,21 @@ async def tg_voice(upd: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if is_blacklisted(uid):
         return
     slot = ACTIVE_SLOTS.get(uid)
+    msg = upd.effective_message
     if slot is None:
-        await upd.message.reply_text("Выберите слот через /start")
+        await msg.reply_text("Выберите слот через /start")
         return
 
-    v = upd.message.voice or upd.message.audio
+    v = msg.voice or msg.audio or msg.video_note
     if not v:
         return
 
     allowed = tariff_info(uid)["slots"]
     if not (0 <= slot < allowed):
-        await upd.message.reply_text(f"Слот {slot+1} вне диапазона.")
+        await msg.reply_text(f"Слот {slot+1} вне диапазона.")
         return
 
-    await upd.message.reply_text("⏳ Обрабатываю запись…")
+    await msg.reply_text("⏳ Обрабатываю запись…")
 
     user_dir = USERS_EMB / uid
     before = set(user_dir.glob("speaker_embedding_*.npz"))
@@ -687,7 +688,7 @@ async def tg_voice(upd: Update, ctx: ContextTypes.DEFAULT_TYPE):
     after = set(user_dir.glob("speaker_embedding_*.npz"))
     new = after - before
     if not new:
-        await upd.message.reply_text("Ошибка создания слепка.")
+        await msg.reply_text("Ошибка создания слепка.")
         return
 
     new_file = new.pop()
@@ -695,24 +696,25 @@ async def tg_voice(upd: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if target.exists():
         target.unlink()
     new_file.rename(target)
-    await upd.message.reply_text(
+    await msg.reply_text(
         "🗣️ Слепок создан.", reply_markup=build_slot_keyboard(uid)
     )
 
 
 async def tg_text(upd: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not upd.message or not upd.message.text:
+    msg = upd.effective_message
+    if not msg or not msg.text:
         return
 
     uid = str(upd.effective_user.id)
-    txt = upd.message.text.strip()
+    txt = msg.text.strip()
 
     if is_blacklisted(uid):
         return
 
     settings = load_json(SETTINGS_DB).get(uid, {})
     if not settings.get("filter_off"):
-        await upd.message.reply_text("⏳ Анализирую текст…")
+        await msg.reply_text("⏳ Анализирую текст…")
         
         clf = get_classifier()
         scores = await clf.analyse(txt)
@@ -734,16 +736,16 @@ async def tg_text(upd: Update, ctx: ContextTypes.DEFAULT_TYPE):
             if parts:
                 warn = "; ".join(parts)
 
-        await upd.message.reply_text(
+        await msg.reply_text(
             "Результат: безопасно" if not warn else "Результат: опасно"
         )
         if warn:
             s = add_strike(uid)
             if s >= MAX_STRIKES:
                 add_black(uid)
-                await upd.message.reply_text("🚫 Заблокировано.")
+                await msg.reply_text("🚫 Заблокировано.")
                 return
-            await upd.message.reply_text(f"⚠️ {warn}. Strike {s}/{MAX_STRIKES}.")
+            await msg.reply_text(f"⚠️ {warn}. Strike {s}/{MAX_STRIKES}.")
             return
     else:
         log_line(uid, txt)
@@ -754,18 +756,18 @@ async def tg_text(upd: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     if daily_gen_count(uid) >= tariff_info(uid)["daily_gen"]:
-        await upd.message.reply_text("Дневной лимит генераций исчерпан.")
+        await msg.reply_text("Дневной лимит генераций исчерпан.")
         return
 
     emb = USERS_EMB / uid / f"speaker_embedding_{slot}.npz"
     if not emb.exists():
-        await upd.message.reply_text(f"Слот {slot+1} пуст. Выберите занятый слот.")
+        await msg.reply_text(f"Слот {slot+1} пуст. Выберите занятый слот.")
         return
 
     apply_user_settings(uid)
     VOICE.user_embedding[uid] = emb  # type: ignore
 
-    await upd.message.reply_text("⏳ Генерирую речь…")
+    await msg.reply_text("⏳ Генерирую речь…")
 
     loop = asyncio.get_running_loop()
     try:
@@ -783,7 +785,7 @@ async def tg_text(upd: Update, ctx: ContextTypes.DEFAULT_TYPE):
             title="TTS",
         )
     inc_daily_gen(uid)
-    await upd.message.reply_text("✅ Готово")
+    await msg.reply_text("✅ Готово")
 
 
 def build_tariff_keyboard(current: str) -> InlineKeyboardMarkup:
@@ -861,8 +863,13 @@ def main():
     app_tg.add_handler(
         MessageHandler(filters.StatusUpdate.WEB_APP_DATA, handle_web_app)
     )
-    app_tg.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, tg_voice))
+    voice_f = filters.VOICE | filters.AUDIO | filters.VIDEO_NOTE
+    app_tg.add_handler(MessageHandler(voice_f, tg_voice))
     app_tg.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, tg_text))
+    edited = filters.UpdateType.EDITED_MESSAGE
+    app_tg.add_handler(MessageHandler(edited & filters.TEXT, tg_text))
+    edited_all = filters.UpdateType.EDITED_MESSAGE | filters.UpdateType.EDITED_CHANNEL_POST
+    app_tg.add_handler(MessageHandler(edited_all & voice_f, tg_voice))
     print("🤖 Bot up.")
     app_tg.run_polling()
 
